@@ -1083,7 +1083,6 @@ def hybrid_strategy(df, short_ma, long_ma, atr_threshold_col):
 
     return df
 
-
 def calculate_atr_statistics(df):
     """
     Calculate and add various ATR statistics to the DataFrame.
@@ -1129,6 +1128,42 @@ def calculate_atr_statistics(df):
     print(f"Max: {df['atr_maximum'].iloc[0]}")
     print(f"Min: {df['atr_minimum'].iloc[0]}")
 
+    return df
+
+def calculate_price_action_envelope(df, high_col='high', low_col='low', window=5):
+    """
+    Calculate the continuous higher highs, higher lows, lower highs, and lower lows
+    to create an envelope that wraps around the price action.
+    
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing the price data.
+    high_col (str): The column name for the high prices (default 'high').
+    low_col (str): The column name for the low prices (default 'low').
+    window (int): The window size for detecting local highs and lows (default 5).
+    
+    Returns:
+    pd.DataFrame: The DataFrame with added columns for the price action envelope.
+    """
+    # Calculate rolling max (higher highs) and rolling min (lower lows)
+    df['higher_high'] = df[high_col].rolling(window=window, min_periods=1).max()
+    df['lower_low'] = df[low_col].rolling(window=window, min_periods=1).min()
+    
+    # Calculate rolling min of high for higher lows, and rolling max of low for lower highs
+    df['higher_low'] = df[low_col].rolling(window=window, min_periods=1).min().cummax()
+    df['lower_high'] = df[high_col].rolling(window=window, min_periods=1).max().cummin()
+    
+    # Create the envelope by combining these calculated values
+    df['price_action_upper'] = df[['higher_high', 'lower_high']].max(axis=1)
+    df['price_action_lower'] = df[['lower_low', 'higher_low']].min(axis=1)
+    
+    # Drop intermediate columns if not needed
+    df.drop(columns=['higher_high', 'lower_low', 'higher_low', 'lower_high'], inplace=True)
+
+    # Add moving averages for price_action_upper and price_action_lower
+    ma_period = window  # Set the moving average period length to 5
+    df['ma_price_action_upper'] = df['price_action_upper'].rolling(window=ma_period, min_periods=1).mean()
+    df['ma_price_action_lower'] = df['price_action_lower'].rolling(window=ma_period, min_periods=1).mean()
+    
     return df
 
 def calculate_position_percent_changes(df, price_col='close'):
@@ -1612,6 +1647,31 @@ def add_signal_markers(df, signal_column='signal_column', price_col='close', buy
 
     return df
 
+def add_signal_markers_long_only(df, signal_column='signal_column', price_col='close', buy_marker='buy_marker', sell_marker='sell_marker', neutral_marker='neutral_marker'):
+    """
+    Adds columns for buy, sell, and market neutral signal markers in the DataFrame.
+
+    Parameters:
+    - df (pd.DataFrame): The DataFrame containing the trading data.
+    - signal_column (str): The name of the column containing the trading signals.
+    """
+    df[buy_marker] = None
+    df[sell_marker] = None
+    df[neutral_marker] = None  # Add a column for market neutral markers
+
+    previous_signal = df[signal_column].shift(1)
+    signal_changes = df[signal_column] != previous_signal
+
+    for idx, signal in df[signal_changes].iterrows():
+        if signal[signal_column] == 1:
+            df.at[idx, buy_marker] = signal[price_col]
+        elif signal[signal_column] == -1:
+            df.at[idx, sell_marker] = signal[price_col]
+        elif signal[signal_column] == 0:
+            df.at[idx, neutral_marker] = signal[price_col]
+
+    return df
+
 def add_indicator_plot(df, signal_column):
     """
     Prepares indicator columns for plotting on the main plot, panel 2, and panel 3, including black dashed zero lines.
@@ -2032,3 +2092,83 @@ def plot_for_time_range(df, start_day, end_day, start_time='09:30', end_time='16
 # end_date = '2020-02-12'
 # filtered_df = get_vwap_bands_by_date_range(df_viz, start_date, end_date)
 # print(filtered_df)
+
+# def check_moving_average(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5'):
+#     """
+#     Function to check if the moving average is above or below another moving average for each row.
+#     - Sets stop loss only on opening trades.
+#     - Resets stop loss when position is neutral.
+#     - Applies trend indicator adjustments:
+#       - If 'trend_indicator' > 75, reverse MA logic.
+#       - If 'trend_indicator' < 25, stay market neutral.
+
+#     Parameters:
+#     - candles (pd.DataFrame): The DataFrame containing candle data.
+#     - ma_name1 (str): The column name for the first moving average (default is 'wma_5').
+#     - ma_name2 (str): The column name for the second moving average (default is 'sma_5').
+#     - rsi_column (str): The column name for the RSI indicator (default is 'rsi_5').
+
+#     Returns:
+#     - candles (pd.DataFrame): The DataFrame with updated 'signal' and stop loss values.
+#     """
+#     ma_position_open = False  # Initialize MA position status as closed
+#     ma_entry_price = None     # Initialize MA entry price as nothing yet
+#     rsi_position_open = False # Initialize RSI position status as closed
+#     rsi_entry_price = None    # Initialize RSI entry price as nothing yet
+
+#     for i, row in candles.iterrows():                          # Iterate through each row in the candles DataFrame
+
+#         # Apply Trend Indicator Adjustments
+#         if row.get('trend_indicator', 50) > 75:                # If the trend indicator is above 75
+#             ma_long_condition = row[ma_name1] < row[ma_name2]  # Reverse: open when wma is below sma
+#             ma_close_condition = row[ma_name1] > row[ma_name2] # Close when wma is above sma
+#         elif row.get('trend_indicator', 50) < 25:              # If trend indicator is below 25
+#             ma_position_open = False                           # Force market neutral
+#             rsi_position_open = False
+#             candles.at[i, f'signal_{ma_name1}_{ma_name2}'] = 0
+#             candles.at[i, f'signal_{rsi_column}'] = 0
+#             candles.at[i, 'stop_loss_ma'] = None
+#             candles.at[i, 'stop_loss_rsi'] = None
+#             continue                                           # Skip to the next row
+#         else:
+#             ma_long_condition = row[ma_name1] > row[ma_name2]  # Standard: open when wma is above sma
+#             ma_close_condition = row[ma_name1] < row[ma_name2] # Close when wma is below sma
+
+#         # Moving Average Strategy
+#         if pd.notna(row[ma_name1]) and pd.notna(row[ma_name2]):
+#             if not ma_position_open and ma_long_condition:     # Open position logic
+#                 ma_position_open = True
+#                 ma_entry_price = row['close']
+#                 candles.at[i, f'signal_{ma_name1}_{ma_name2}'] = 1
+#                 candles.at[i, 'stop_loss_ma'] = ma_entry_price - row['candle_span_maxavg_mean']
+#             elif ma_position_open and row['close'] < (ma_entry_price - row['candle_span_maxavg_mean']):
+#                 ma_position_open = False
+#                 candles.at[i, f'signal_{ma_name1}_{ma_name2}'] = 0
+#                 candles.at[i, 'stop_loss_ma'] = None
+#             elif ma_position_open and ma_close_condition:
+#                 ma_position_open = False
+#                 candles.at[i, f'signal_{ma_name1}_{ma_name2}'] = 0
+#                 candles.at[i, 'stop_loss_ma'] = None
+#             elif ma_position_open:
+#                 # Carry forward stop loss if position remains open
+#                 candles.at[i, 'stop_loss_ma'] = candles.at[i-1, 'stop_loss_ma']
+
+#         # RSI Strategy
+#         if pd.notna(row[rsi_column]):
+#             if not rsi_position_open and row[rsi_column] < 50:
+#                 rsi_position_open = True
+#                 rsi_entry_price = row['close']
+#                 candles.at[i, f'signal_{rsi_column}'] = 1
+#                 candles.at[i, 'stop_loss_rsi'] = rsi_entry_price - row['candle_span_maxavg_mean']
+#             elif rsi_position_open and row['close'] < rsi_entry_price - row['candle_span_maxavg_mean']:
+#                 rsi_position_open = False
+#                 candles.at[i, f'signal_{rsi_column}'] = 0
+#                 candles.at[i, 'stop_loss_rsi'] = None
+#             elif rsi_position_open and row[rsi_column] >= 50:
+#                 rsi_position_open = False
+#                 candles.at[i, f'signal_{rsi_column}'] = 0
+#                 candles.at[i, 'stop_loss_rsi'] = None
+#             elif rsi_position_open:
+#                 candles.at[i, 'stop_loss_rsi'] = candles.at[i-1, 'stop_loss_rsi']
+
+#     return candles

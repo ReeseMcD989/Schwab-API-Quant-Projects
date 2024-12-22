@@ -100,7 +100,7 @@ class Stream:
 
             self._thread = threading.Thread(target=_start_async, daemon=False)
             self._thread.start()
-            sleep(1)  # if the thread does not start in time then the main program may close before the streamer starts
+            sleep(10)  # if the thread does not start in time then the main program may close before the streamer starts
         else:
             print("Stream already active.")
 
