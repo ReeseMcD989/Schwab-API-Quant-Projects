@@ -3192,6 +3192,1432 @@ def determine_exit_prices_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_col
 
     return candles
 
+###############################################################################################################################
+# Trade logic after implementing market vs limit order iteration and before iterating through directional bias
+
+def generate_trading_signals_long(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', strategy_type='trend', order_type='market'):
+    """
+    Generate buy/sell signals based on moving averages and RSI indicators for either
+    a trend-following or mean-reversion strategy.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - strategy_type (str): 'trend' or 'reversion'.
+
+    Returns:
+    - candles (pd.DataFrame): The DataFrame with updated signal and position state columns.
+    """
+
+    # Append strategy type to column names
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    ma_position_open_col = f'position_open_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_position_open_col = f'position_open_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize columns
+    candles[ma_signal_column] = 0
+    candles[rsi_signal_column] = 0
+    candles[ma_position_open_col] = False
+    candles[rsi_position_open_col] = False
+
+    # ======= MOVING AVERAGE LOGIC =======
+    ma_position_open = False
+    ma_signals = []
+    ma_positions = []
+
+    for ma1, ma2 in zip(candles[ma_name1], candles[ma_name2]):
+        if strategy_type == 'trend':
+            # Trend-following logic
+            if not ma_position_open and ma1 <= ma2:
+                ma_position_open = True
+                ma_signals.append(0)  # Enter
+            elif ma_position_open and ma1 > ma2:
+                ma_position_open = False
+                ma_signals.append(1)  # Exit
+            else:
+                ma_signals.append(ma_signals[-1] if ma_signals else 0)
+        elif strategy_type == 'reversion':
+            # Mean-reversion logic (inverted)
+            if not ma_position_open and ma1 > ma2:
+                ma_position_open = True
+                ma_signals.append(0)  # Enter
+            elif ma_position_open and ma1 <= ma2:
+                ma_position_open = False
+                ma_signals.append(1)  # Exit
+            else:
+                ma_signals.append(ma_signals[-1] if ma_signals else 0)
+
+        ma_positions.append(ma_position_open)
+
+    candles[ma_signal_column] = ma_signals
+    candles[ma_position_open_col] = ma_positions
+
+    # ======= RSI LOGIC =======
+    rsi_position_open = False
+    rsi_signals = []
+    rsi_positions = []
+
+    for rsi in candles[rsi_column]:
+        if strategy_type == 'trend':
+            if not rsi_position_open and rsi < 50:
+                rsi_position_open = True
+                rsi_signals.append(0)  # Enter
+            elif rsi_position_open and rsi >= 50:
+                rsi_position_open = False
+                rsi_signals.append(1)  # Exit
+            else:
+                rsi_signals.append(rsi_signals[-1] if rsi_signals else 0)
+        elif strategy_type == 'reversion':
+            if not rsi_position_open and rsi >= 50:
+                rsi_position_open = True
+                rsi_signals.append(0)  # Enter
+            elif rsi_position_open and rsi < 50:
+                rsi_position_open = False
+                rsi_signals.append(1)  # Exit
+            else:
+                rsi_signals.append(rsi_signals[-1] if rsi_signals else 0)
+
+        rsi_positions.append(rsi_position_open)
+
+    candles[rsi_signal_column] = rsi_signals
+    candles[rsi_position_open_col] = rsi_positions
+
+    return candles
+
+def update_position_open_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', strategy_type='trend', order_type='market'):
+    """
+    Update the 'position_open' columns for MA and RSI strategies for a specific strategy type (trend or reversion).
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing the signals and position columns.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI signal.
+    - strategy_type (str): Either 'trend' or 'reversion'
+
+    Returns:
+    - pd.DataFrame: The updated DataFrame with 'position_open' columns for the chosen strategy type.
+    """
+    # Append strategy type to column names
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    ma_position_open = f'position_open_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_position_open = f'position_open_{rsi_column}_{strategy_type}_{order_type}'
+    
+    # Update position open columns based on the signals
+    candles[ma_position_open] = candles[ma_signal_column] == 1
+    candles[rsi_position_open] = candles[rsi_signal_column] == 1
+    
+    return candles
+
+def determine_entry_prices_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', 
+                             ticker_to_tick_size=None, ticker=None, strategy_type='trend', order_type='market'):
+    """
+    Determine entry prices for MA and RSI strategies based on signals.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - ticker_to_tick_size (dict): Mapping of tickers to their tick sizes.
+    - ticker (str): The ticker for which the tick size applies.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting the signal logic.
+    - order_type (str): 'market' or 'limit', defining how entry prices are set.
+
+    Returns:
+    - candles (pd.DataFrame): The DataFrame with updated entry price columns.
+    """
+    # Dynamically generate column names including the strategy type
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize entry price columns
+    candles[ma_entry_price] = None
+    candles[rsi_entry_price] = None
+
+    # Get tick size
+    tick_size = ticker_to_tick_size.get(ticker, 0) if ticker_to_tick_size else 0
+
+    # Determine tick size adjustment based on order type
+    add_tick_size = order_type == 'market'
+
+    # Moving Average Strategy
+    ma_signals = candles[ma_signal_column]
+    ma_close_prices = candles['close']
+    ma_entry_mask = (ma_signals == 1) & (ma_signals.shift(1) != 1)
+    candles.loc[ma_entry_mask, ma_entry_price] = ma_close_prices[ma_entry_mask] + (tick_size if add_tick_size else 0)
+
+    # RSI Strategy
+    rsi_signals = candles[rsi_signal_column]
+    rsi_entry_mask = (rsi_signals == 1) & (rsi_signals.shift(1) != 1)
+    candles.loc[rsi_entry_mask, rsi_entry_price] = ma_close_prices[rsi_entry_mask] + (tick_size if add_tick_size else 0)
+
+    return candles
+
+def determine_exit_prices_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', 
+                            ticker_to_tick_size=None, ticker=None, strategy_type='trend', order_type='market'):
+    """
+    Determine exit prices for MA and RSI strategies based on signals.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - ticker_to_tick_size (dict): Mapping of tickers to their tick sizes.
+    - ticker (str): The ticker for which the tick size applies.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting the signal logic.
+    - order_type (str): 'market' or 'limit', defining how exit prices are set.
+
+    Returns:
+    - candles (pd.DataFrame): The DataFrame with updated exit price columns.
+    """
+    # Dynamically generate column names including the strategy type
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize exit price columns
+    candles[ma_exit_price] = None
+    candles[rsi_exit_price] = None
+
+    # Get tick size
+    tick_size = ticker_to_tick_size.get(ticker, 0) if ticker_to_tick_size else 0
+
+    # Determine tick size adjustment based on order type
+    subtract_tick_size = order_type == 'market'
+
+    # Moving Average Strategy
+    ma_signals = candles[ma_signal_column]
+    ma_close_prices = candles['close']
+    ma_exit_mask = (ma_signals == 0) & (ma_signals.shift(1) == 1)
+    candles.loc[ma_exit_mask, ma_exit_price] = ma_close_prices[ma_exit_mask] - (tick_size if subtract_tick_size else 0)
+
+    # RSI Strategy
+    rsi_signals = candles[rsi_signal_column]
+    rsi_exit_mask = (rsi_signals == 0) & (rsi_signals.shift(1) == 1)
+    candles.loc[rsi_exit_mask, rsi_exit_price] = ma_close_prices[rsi_exit_mask] - (tick_size if subtract_tick_size else 0)
+
+    return candles
+
+def calculate_stop_losses_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', strategy_type='trend', order_type='market'):
+    """
+    Dynamically calculate stop loss levels for MA and RSI strategies and ensure they persist while positions are open.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting column naming.
+
+    Returns:
+    - pd.DataFrame: The updated DataFrame with dynamically named stop loss columns.
+    """
+    # Dynamically generate column names including the strategy type
+    ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+    rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+    stop_loss_ma = f'stop_loss_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    stop_loss_rsi = f'stop_loss_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize stop loss columns
+    candles[stop_loss_ma] = None
+    candles[stop_loss_rsi] = None
+
+    # Moving Average Stop Loss
+    ma_entry_mask = candles[ma_entry_price].notnull()
+    ma_exit_mask = candles[ma_exit_price].notnull()
+    
+    # Set stop loss where positions open
+    candles.loc[ma_entry_mask, stop_loss_ma] = candles[ma_entry_price] - candles['candle_span_max']
+
+    # Reset stop loss and close position where positions close
+    candles.loc[ma_exit_mask, stop_loss_ma] = None
+
+    # RSI Stop Loss
+    rsi_entry_mask = candles[rsi_entry_price].notnull()
+    rsi_exit_mask = candles[rsi_exit_price].notnull()
+    
+    # Set stop loss where positions open
+    candles.loc[rsi_entry_mask, stop_loss_rsi] = candles[rsi_entry_price] - candles['candle_span_max']
+
+    # Reset stop loss and close position where positions close
+    candles.loc[rsi_exit_mask, stop_loss_rsi] = None
+
+    # Forward-fill stop loss for both strategies
+    candles[stop_loss_ma] = candles[stop_loss_ma].ffill()
+    candles[stop_loss_rsi] = candles[stop_loss_rsi].ffill()
+
+    return candles
+
+def track_stop_loss_hits_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', ticker_to_tick_size=None, ticker=None, strategy_type='trend', order_type='market'):
+    """
+    Track whether stop losses have been hit for MA and RSI strategies and update dynamically named columns.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - ticker_to_tick_size (dict): Mapping of tickers to their tick sizes.
+    - ticker (str): The ticker for which the tick size applies.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting column naming.
+
+    Returns:
+    - pd.DataFrame: The updated DataFrame with dynamically named stop loss hit flags.
+    """
+    # Dynamically generate column names including strategy type
+    stop_loss_ma = f'stop_loss_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    stop_loss_rsi = f'stop_loss_{rsi_column}_{strategy_type}_{order_type}'
+    ma_stop_loss_hit = f'stop_loss_hit_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_stop_loss_hit = f'stop_loss_hit_{rsi_column}_{strategy_type}_{order_type}'
+    ma_position_open = f'position_open_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_position_open = f'position_open_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize stop loss hit columns
+    candles[ma_stop_loss_hit] = False
+    candles[rsi_stop_loss_hit] = False
+
+    # Get tick size (ensure it's non-zero)
+    tick_size = ticker_to_tick_size.get(ticker, 0) if ticker_to_tick_size else 0
+
+    # Ensure stop loss values are numerical (convert None to NaN)
+    candles[stop_loss_ma] = candles[stop_loss_ma].fillna(float('inf'))
+    candles[stop_loss_rsi] = candles[stop_loss_rsi].fillna(float('inf'))
+
+    # Moving Average Stop Loss Hit Logic
+    ma_hit_condition = (
+        (candles[stop_loss_ma].notnull()) & 
+        (candles['close'] <= (candles[stop_loss_ma])) & 
+        candles[ma_position_open]
+    )
+    candles.loc[ma_hit_condition, ma_stop_loss_hit] = True
+
+    # RSI Stop Loss Hit Logic
+    rsi_hit_condition = (
+        (candles[stop_loss_rsi].notnull()) & 
+        (candles['close'] <= (candles[stop_loss_rsi])) & 
+        candles[rsi_position_open]
+    )
+    candles.loc[rsi_hit_condition, rsi_stop_loss_hit] = True
+
+    return candles
+
+def adjust_signals_for_stop_loss_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', strategy_type='trend', order_type='market'):
+    """
+    Adjust MA and RSI signals to 0 where stop loss has been hit.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting column naming.
+
+    Returns:
+    - pd.DataFrame: The updated DataFrame with adjusted signals.
+    """
+    # Dynamically generate column names including strategy type
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    ma_stop_loss_hit_column = f'stop_loss_hit_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_stop_loss_hit_column = f'stop_loss_hit_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Adjust MA and RSI signals where stop loss has been hit
+    candles.loc[candles[ma_stop_loss_hit_column], ma_signal_column] = 0
+    candles.loc[candles[rsi_stop_loss_hit_column], rsi_signal_column] = 0
+
+    return candles
+
+def update_stop_loss_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', strategy_type='trend', order_type='market'):
+    """
+    Dynamically set stop loss columns to NaN where corresponding signal columns are 0.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - strategy_type (str): Either 'trend' or 'reversion', affecting column naming.
+
+    Returns:
+    - pd.DataFrame: The updated DataFrame with dynamically named stop loss columns modified.
+    """
+    # Dynamically generate column names including strategy type
+    ma_signal_column = f'signal_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_signal_column = f'signal_{rsi_column}_{strategy_type}_{order_type}'
+    stop_loss_ma = f'stop_loss_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    stop_loss_rsi = f'stop_loss_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Update stop loss columns to NaN where signals are 0
+    candles.loc[candles[ma_signal_column] == 0, stop_loss_ma] = float('nan')
+    candles.loc[candles[rsi_signal_column] == 0, stop_loss_rsi] = float('nan')
+
+    return candles
+
+def calculate_profit_loss_1(candles, ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', contract_multiplier=1, trade_commission=1.5, strategy_type='trend', order_type='market'):
+    """ 
+    Dynamically calculate profit and loss based on entry and exit price columns, including cumulative commission costs.
+
+    Parameters:
+    - candles (pd.DataFrame): The DataFrame containing candle data with entry and exit price columns.
+    - contract_multiplier (float): The multiplier for PnL calculation (e.g., contract size).
+    - trade_commission (float): The commission cost per trade.
+    - ma_name1 (str): Column name for the first moving average.
+    - ma_name2 (str): Column name for the second moving average.
+    - rsi_column (str): Column name for the RSI indicator.
+    - strategy_type (str): The type of strategy ('trend' or 'reversion').
+
+    Returns:
+    - pd.DataFrame: The DataFrame with dynamically named profit/loss and commission cost columns.
+    """
+    # Dynamically generate column names with strategy type
+    ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+    rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+    pnl_ma_col = f'pnl_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    pnl_rsi_col = f'pnl_{rsi_column}_{strategy_type}_{order_type}'
+    cum_pnl_ma_col = f'cum_{pnl_ma_col}'
+    cum_pnl_rsi_col = f'cum_{pnl_rsi_col}'
+    cum_pnl_all_col = f'cum_pnl_all_{ma_name1}_{ma_name2}_{rsi_column}_{strategy_type}_{order_type}'
+    ma_commission_col = f'commission_cost_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_commission_col = f'commission_cost_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Initialize PnL and commission columns
+    candles[pnl_ma_col] = 0.0
+    candles[pnl_rsi_col] = 0.0
+    candles[ma_commission_col] = 0.0
+    candles[rsi_commission_col] = 0.0
+
+    # Moving Average Strategy PnL and Commission Calculation
+    ma_entry_indices = candles.index[candles[ma_entry_price].notnull()]
+    ma_exit_indices = candles.index[candles[ma_exit_price].notnull()]
+
+    # Pair up entry and exit prices
+    valid_pairs_ma = min(len(ma_entry_indices), len(ma_exit_indices))
+    ma_entry_prices = candles.loc[ma_entry_indices[:valid_pairs_ma], ma_entry_price].values
+    ma_exit_prices = candles.loc[ma_exit_indices[:valid_pairs_ma], ma_exit_price].values
+
+    # Calculate commission costs for MA strategy
+    candles[ma_commission_col] = candles[ma_entry_price].notna().astype(int) * trade_commission + \
+                                 candles[ma_exit_price].notna().astype(int) * trade_commission
+    candles[ma_commission_col] = candles[ma_commission_col].cumsum()  # Accumulate commission costs
+
+    # Calculate PnL for MA strategy
+    ma_pnl = (ma_exit_prices - ma_entry_prices) * contract_multiplier
+    candles.loc[ma_exit_indices[:valid_pairs_ma], pnl_ma_col] = ma_pnl
+
+    # RSI Strategy PnL and Commission Calculation
+    rsi_entry_indices = candles.index[candles[rsi_entry_price].notnull()]
+    rsi_exit_indices = candles.index[candles[rsi_exit_price].notnull()]
+
+    # Pair up entry and exit prices
+    valid_pairs_rsi = min(len(rsi_entry_indices), len(rsi_exit_indices))
+    rsi_entry_prices = candles.loc[rsi_entry_indices[:valid_pairs_rsi], rsi_entry_price].values
+    rsi_exit_prices = candles.loc[rsi_exit_indices[:valid_pairs_rsi], rsi_exit_price].values
+
+    # Calculate commission costs for RSI strategy
+    candles[rsi_commission_col] = candles[rsi_entry_price].notna().astype(int) * trade_commission + \
+                                  candles[rsi_exit_price].notna().astype(int) * trade_commission
+    candles[rsi_commission_col] = candles[rsi_commission_col].cumsum()  # Accumulate commission costs
+
+    # Calculate PnL for RSI strategy
+    rsi_pnl = (rsi_exit_prices - rsi_entry_prices) * contract_multiplier
+    candles.loc[rsi_exit_indices[:valid_pairs_rsi], pnl_rsi_col] = rsi_pnl
+
+    # Calculate cumulative PnL for both strategies
+    candles[cum_pnl_ma_col] = candles[pnl_ma_col].cumsum()
+    candles[cum_pnl_rsi_col] = candles[pnl_rsi_col].cumsum()
+
+    # Calculate combined cumulative PnL
+    candles[cum_pnl_all_col] = candles[cum_pnl_ma_col] + candles[cum_pnl_rsi_col]
+
+    return candles
+
+# Iterate through all tickers in compressed_sessions
+for ticker, sessions in compressed_sessions.items():
+    print(f"Processing ticker: {ticker}")
+
+    # Iterate through all sessions of the current ticker
+    for time_slice, compressions in sessions.items():
+        print(f"  Processing session: {time_slice}, Total Compressions: {len(compressions)}")
+
+        # Iterate through all compression levels of the current session
+        for compression_name, df in compressions.items():
+            print(f"    Processing compression: {compression_name} in session {time_slice}")
+
+            # Iterate through all the ma_combinations
+            for sig_ma, con_ma, rsi_col in ma_combinations:
+
+                # Iterate through both 'trend' and 'reversion' strategies
+                for strategy_type in ['trend', 'reversion']:
+                    print(f"      Applying {strategy_type} strategy for {sig_ma} and {con_ma}")
+
+                    for order_type in ['market', 'limit']:
+                        print(f"        Applying {order_type} order_type")
+
+                        # Generate trading signals for the current strategy
+                        compressions[compression_name] = generate_trading_signals_long(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Update position_open columns to be 1:1 verbal boolean with the signal
+                        compressions[compression_name] = update_position_open_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Determine entry prices for each ticker
+                        compressions[compression_name] = determine_entry_prices_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            ticker_to_tick_size=ticker_to_tick_size,
+                            ticker=ticker,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Determine exit prices for each ticker
+                        compressions[compression_name] = determine_exit_prices_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            ticker_to_tick_size=ticker_to_tick_size,
+                            ticker=ticker,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Stop loss calculation
+                        compressions[compression_name] = calculate_stop_losses_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Track stop loss hits
+                        compressions[compression_name] = track_stop_loss_hits_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            ticker_to_tick_size=ticker_to_tick_size,
+                            ticker=ticker,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Adjust signals from stop loss hits
+                        compressions[compression_name] = adjust_signals_for_stop_loss_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Re-update position_open column after stop loss hits
+                        compressions[compression_name] = update_position_open_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Re-determine entry prices after stop loss hits
+                        compressions[compression_name] = determine_entry_prices_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            ticker_to_tick_size=ticker_to_tick_size,
+                            ticker=ticker,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Re-determine exit prices after stop loss hits
+                        compressions[compression_name] = determine_exit_prices_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            ticker_to_tick_size=ticker_to_tick_size,
+                            ticker=ticker,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+                        # Update stop loss levels after stop loss hits
+                        compressions[compression_name] = update_stop_loss_1(
+                            df,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                            
+                        )
+
+                        # Calculate profit/loss for each ticker's DataFrame
+                        compressions[compression_name] = calculate_profit_loss_1(
+                            df,
+                            contract_multiplier=1,
+                            ma_name1=sig_ma,
+                            ma_name2=con_ma,
+                            rsi_column=rsi_col,
+                            strategy_type=strategy_type,
+                            order_type=order_type
+                        )
+
+def generate_pnl_dataframe(compressed_sessions, ticker_to_tick_size, ticker_to_point_value, 
+                           ma_name1='wma_5', ma_name2='sma_5', rsi_column='rsi_5', 
+                           strategy_type='trend', order_type='market',
+                           daily_stop_loss_dollars=-1000):
+    """
+    Generates a DataFrame containing detailed PnL, trade statistics, and max gain/loss for all tickers, 
+    sessions, and compression factors, now including trend/reversion strategy type and MA/RSI periods.
+
+    Parameters:
+    - compressed_sessions: Dictionary of nested dictionaries containing trading data structured as:
+      {ticker: {session: {compression_factor: DataFrame}}}
+    - ticker_to_tick_size: Dictionary mapping tickers to tick sizes.
+    - ticker_to_point_value: Dictionary mapping tickers to point values.
+    - ma_name1, ma_name2: Moving average column names.
+    - rsi_column: RSI column name.
+    - strategy_type: "trend" or "reversion".
+
+    Returns:
+    - pd.DataFrame: A DataFrame with PnL, trade statistics, max gain/loss, session names, compression factors, 
+      strategy type, and indicator periods.
+    """
+    def compute_stop_loss_metrics(dollar_pnl, dollar_max_loss, daily_stop_loss_dollars):
+        hit = int(dollar_max_loss <= daily_stop_loss_dollars)
+        cost = daily_stop_loss_dollars - dollar_pnl if dollar_pnl > daily_stop_loss_dollars and hit else 0.0
+        gain = daily_stop_loss_dollars - dollar_pnl if dollar_pnl < daily_stop_loss_dollars and hit else 0.0
+        return hit, cost, gain
+
+    # Extract period lengths from indicator names (assumes format like "wma_5", "sma_10", "rsi_14")
+    ma1_period = int(ma_name1.split('_')[-1])  # Extract last numeric part
+    ma2_period = int(ma_name2.split('_')[-1])
+    rsi_period = int(rsi_column.split('_')[-1])
+
+    # Generate dynamic column names for PnL and trade metrics
+    pnl_ma_col = f'pnl_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    pnl_rsi_col = f'pnl_{rsi_column}_{strategy_type}_{order_type}'
+    cum_pnl_ma_col = f'cum_{pnl_ma_col}'
+    cum_pnl_rsi_col = f'cum_{pnl_rsi_col}'
+    cum_pnl_all_col = f'cum_pnl_all_{ma_name1}_{ma_name2}_{rsi_column}_{strategy_type}_{order_type}'
+    ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+    rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+    ma_commission_col = f'commission_cost_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_commission_col = f'commission_cost_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Create a list to hold rows of the DataFrame
+    pnl_rows = []
+
+    # Iterate over tickers
+    for ticker, sessions in compressed_sessions.items():
+        tick_size = ticker_to_tick_size.get(ticker, "Unknown")
+        point_value = ticker_to_point_value.get(ticker, 1)
+
+        # Iterate over sessions
+        for session_name, compressions in sessions.items():
+
+            # Iterate over compression factors
+            for compression_name, df in compressions.items():
+                try:
+                    # Extract compression factor (e.g., '5_minute_compression' → 5)
+                    compression_factor = int(compression_name.split('_')[0])
+
+                    # Calculate cumulative PnL and other statistics
+                    ma_pnl = round(df[cum_pnl_ma_col].iloc[-1], 3)
+                    rsi_pnl = round(df[cum_pnl_rsi_col].iloc[-1], 3)
+                    total_pnl = round(df[cum_pnl_all_col].iloc[-1], 3)
+                    close_price_diff = round(df["close"].iloc[-1] - df["close"].iloc[0], 3)
+                    point_alpha = round(total_pnl - close_price_diff, 3)
+
+                    # Retrieve total commission costs
+                    ma_commission_total = round(df[ma_commission_col].iloc[-1], 3) if ma_commission_col in df else 0.0
+                    rsi_commission_total = round(df[rsi_commission_col].iloc[-1], 3) if rsi_commission_col in df else 0.0
+                    total_commission_cost = ma_commission_total + rsi_commission_total
+
+                    # Calculate total dollar PnLs
+                    # Dollar PnL adjusted for commissions (optional)
+                    ma_dollar_pnl = ma_pnl * point_value
+                    rsi_dollar_pnl = rsi_pnl * point_value
+                    total_dollar_pnl = total_pnl * point_value
+                    ma_dollar_pnl_sub_comms = ma_pnl * point_value - ma_commission_total
+                    rsi_dollar_pnl_sub_comms = rsi_pnl * point_value - rsi_commission_total
+                    total_dollar_pnl_sub_comms = total_pnl * point_value - total_commission_cost
+                    close_price_dollar_diff = close_price_diff * point_value
+                    dollar_alpha = point_alpha * point_value
+
+                    # Count the number of trades for MA and RSI strategies
+                    ma_trades = (df[ma_exit_price].notna().sum() + df[ma_entry_price].notna().sum()) / 2
+                    rsi_trades = (df[rsi_exit_price].notna().sum() + df[rsi_entry_price].notna().sum()) / 2
+
+                    # Calculate max gain and max loss for MA, RSI, and total strategies (point and dollar)
+                    ma_max_gain = round(df[cum_pnl_ma_col].max(), 3)
+                    ma_max_loss = round(df[cum_pnl_ma_col].min(), 3)
+                    rsi_max_gain = round(df[cum_pnl_rsi_col].max(), 3)
+                    rsi_max_loss = round(df[cum_pnl_rsi_col].min(), 3)
+                    total_max_gain = round(df[cum_pnl_all_col].max(), 3)
+                    total_max_loss = round(df[cum_pnl_all_col].min(), 3)
+
+                    ma_max_dollar_gain = ma_max_gain * point_value
+                    ma_max_dollar_loss = ma_max_loss * point_value
+                    rsi_max_dollar_gain = rsi_max_gain * point_value
+                    rsi_max_dollar_loss = rsi_max_loss * point_value
+                    total_max_dollar_gain = total_max_gain * point_value
+                    total_max_dollar_loss = total_max_loss * point_value
+
+                    ma_gain_idx = df[cum_pnl_ma_col].idxmax()
+                    ma_loss_idx = df[cum_pnl_ma_col].idxmin()
+                    rsi_gain_idx = df[cum_pnl_rsi_col].idxmax()
+                    rsi_loss_idx = df[cum_pnl_rsi_col].idxmin()
+                    total_gain_idx = df[cum_pnl_all_col].idxmax()
+                    total_loss_idx = df[cum_pnl_all_col].idxmin()
+
+                    ma_max_dollar_gain_sub_comms = ma_max_dollar_gain - df[ma_commission_col].loc[ma_gain_idx]
+                    ma_max_dollar_loss_sub_comms = ma_max_dollar_loss - df[ma_commission_col].loc[ma_loss_idx]
+                    rsi_max_dollar_gain_sub_comms = rsi_max_dollar_gain - df[rsi_commission_col].loc[rsi_gain_idx]
+                    rsi_max_dollar_loss_sub_comms = rsi_max_dollar_loss - df[rsi_commission_col].loc[rsi_loss_idx]
+                    total_max_dollar_gain_sub_comms = total_max_dollar_gain - (
+                        df[ma_commission_col].loc[total_gain_idx] + df[rsi_commission_col].loc[total_gain_idx]
+                    )
+                    total_max_dollar_loss_sub_comms = total_max_dollar_loss - (
+                        df[ma_commission_col].loc[total_loss_idx] + df[rsi_commission_col].loc[total_loss_idx]
+                    )
+
+                    # Stop loss logic for total, MA, and RSI
+                    stop_loss_hit_total, loss_prevention_cost_total, loss_prevention_gain_total = compute_stop_loss_metrics(
+                        total_dollar_pnl, total_max_dollar_loss, daily_stop_loss_dollars)
+                    stop_loss_hit_ma, loss_prevention_cost_ma, loss_prevention_gain_ma = compute_stop_loss_metrics(
+                        ma_dollar_pnl, ma_max_dollar_loss, daily_stop_loss_dollars)
+                    stop_loss_hit_rsi, loss_prevention_cost_rsi, loss_prevention_gain_rsi = compute_stop_loss_metrics(
+                        rsi_dollar_pnl, rsi_max_dollar_loss, daily_stop_loss_dollars)
+                    
+                    # Compute the new stop-loss metrics for sub_comms
+                    stop_loss_hit_total_sub_comms, loss_prevention_cost_total_sub_comms, loss_prevention_gain_total_sub_comms = compute_stop_loss_metrics(
+                        total_dollar_pnl_sub_comms, total_max_dollar_loss_sub_comms, daily_stop_loss_dollars)
+                    stop_loss_hit_ma_sub_comms, loss_prevention_cost_ma_sub_comms, loss_prevention_gain_ma_sub_comms = compute_stop_loss_metrics(
+                        ma_dollar_pnl_sub_comms, ma_max_dollar_loss_sub_comms, daily_stop_loss_dollars)
+                    stop_loss_hit_rsi_sub_comms, loss_prevention_cost_rsi_sub_comms, loss_prevention_gain_rsi_sub_comms = compute_stop_loss_metrics(
+                        rsi_dollar_pnl_sub_comms, rsi_max_dollar_loss_sub_comms, daily_stop_loss_dollars)
+                    
+                    # Calculate adjusted total PnL after applying stop loss protection
+                    total_dollar_pnl_stop_loss_adjusted = (total_dollar_pnl + loss_prevention_cost_total + loss_prevention_gain_total)
+                    ma_dollar_pnl_stop_loss_adjusted = (ma_dollar_pnl + loss_prevention_cost_ma + loss_prevention_gain_ma)
+                    rsi_dollar_pnl_stop_loss_adjusted = (rsi_dollar_pnl + loss_prevention_cost_rsi + loss_prevention_gain_rsi)
+                    total_dollar_pnl_sub_comms_stop_loss_adjusted = (total_dollar_pnl_sub_comms + loss_prevention_cost_total_sub_comms + loss_prevention_gain_total_sub_comms)
+                    ma_dollar_pnl_sub_comms_stop_loss_adjusted = (ma_dollar_pnl_sub_comms + loss_prevention_cost_ma_sub_comms + loss_prevention_gain_ma_sub_comms)
+                    rsi_dollar_pnl_sub_comms_stop_loss_adjusted = (rsi_dollar_pnl_sub_comms + loss_prevention_cost_rsi_sub_comms + loss_prevention_gain_rsi_sub_comms)
+
+                    # Append row with all calculated metrics
+                    pnl_rows.append({
+                        'ticker': ticker,
+                        'session': session_name,
+                        'compression_factor': compression_factor,
+
+                        'ma_period1': ma1_period,
+                        'ma_period2': ma2_period,
+                        'rsi_period': rsi_period,
+
+                        'strategy_type': strategy_type,
+                        'order_type': order_type,
+
+                        'ma_trades': ma_trades,
+                        'rsi_trades': rsi_trades,
+
+                        'total_point_pnl': total_pnl,
+                        'ma_point_pnl': ma_pnl,
+                        'rsi_point_pnl': rsi_pnl,
+
+                        'total_dollar_pnl': total_dollar_pnl,
+                        'ma_dollar_pnl': ma_dollar_pnl,
+                        'rsi_dollar_pnl': rsi_dollar_pnl,
+
+                        'ma_commission_cost': ma_commission_total,
+                        'rsi_commission_cost': rsi_commission_total,
+                        'total_commission_cost': total_commission_cost,
+
+                        'total_dollar_pnl_sub_comms': total_dollar_pnl_sub_comms,
+                        'ma_dollar_pnl_sub_comms': ma_dollar_pnl_sub_comms,
+                        'rsi_dollar_pnl_sub_comms': rsi_dollar_pnl_sub_comms,
+
+                        'ma_max_point_gain': ma_max_gain,
+                        'ma_max_point_loss': ma_max_loss,
+                        'rsi_max_point_gain': rsi_max_gain,
+                        'rsi_max_point_loss': rsi_max_loss,
+                        'total_max_point_gain': total_max_gain,
+                        'total_max_point_loss': total_max_loss,
+
+                        'ma_max_dollar_gain': ma_max_dollar_gain,
+                        'ma_max_dollar_loss': ma_max_dollar_loss,
+                        'rsi_max_dollar_gain': rsi_max_dollar_gain,
+                        'rsi_max_dollar_loss': rsi_max_dollar_loss,
+                        'total_max_dollar_gain': total_max_dollar_gain,
+                        'total_max_dollar_loss': total_max_dollar_loss,
+
+                        'ma_max_dollar_gain_sub_comms': ma_max_dollar_gain_sub_comms,
+                        'ma_max_dollar_loss_sub_comms': ma_max_dollar_loss_sub_comms,
+                        'rsi_max_dollar_gain_sub_comms': rsi_max_dollar_gain_sub_comms,
+                        'rsi_max_dollar_loss_sub_comms': rsi_max_dollar_loss_sub_comms,
+                        'total_max_dollar_gain_sub_comms': total_max_dollar_gain_sub_comms,
+                        'total_max_dollar_loss_sub_comms': total_max_dollar_loss_sub_comms,
+
+                        'close_price_diff': close_price_diff,
+                        'point_alpha': point_alpha,
+                        'close_price_dollar_diff': close_price_dollar_diff,
+                        'dollar_alpha': dollar_alpha,
+                        'tick_size': tick_size,
+
+                        'daily_stop_loss_dollars': daily_stop_loss_dollars,
+
+                        'session_stop_loss_hit_total': stop_loss_hit_total,
+                        'session_stop_loss_hit_ma': stop_loss_hit_ma,
+                        'session_stop_loss_hit_rsi': stop_loss_hit_rsi,
+                        'loss_prevention_cost_total': loss_prevention_cost_total,
+                        'loss_prevention_cost_ma': loss_prevention_cost_ma,
+                        'loss_prevention_cost_rsi': loss_prevention_cost_rsi,                        
+                        'loss_prevention_gain_total': loss_prevention_gain_total,
+                        'loss_prevention_gain_ma': loss_prevention_gain_ma,
+                        'loss_prevention_gain_rsi': loss_prevention_gain_rsi,
+
+                        "session_stop_loss_hit_total_sub_comms": stop_loss_hit_total_sub_comms,
+                        "session_stop_loss_hit_ma_sub_comms": stop_loss_hit_ma_sub_comms,
+                        "session_stop_loss_hit_rsi_sub_comms": stop_loss_hit_rsi_sub_comms,
+                        "loss_prevention_cost_total_sub_comms": loss_prevention_cost_total_sub_comms,
+                        "loss_prevention_cost_ma_sub_comms": loss_prevention_cost_ma_sub_comms,
+                        "loss_prevention_cost_rsi_sub_comms": loss_prevention_cost_rsi_sub_comms,
+                        "loss_prevention_gain_total_sub_comms": loss_prevention_gain_total_sub_comms,
+                        "loss_prevention_gain_ma_sub_comms": loss_prevention_gain_ma_sub_comms,
+                        "loss_prevention_gain_rsi_sub_comms": loss_prevention_gain_rsi_sub_comms,
+
+                        'total_dollar_pnl_stop_loss_adjusted': total_dollar_pnl_stop_loss_adjusted,
+                        'ma_dollar_pnl_stop_loss_adjusted': ma_dollar_pnl_stop_loss_adjusted,
+                        'rsi_dollar_pnl_stop_loss_adjusted': rsi_dollar_pnl_stop_loss_adjusted,
+                        'total_dollar_pnl_sub_comms_stop_loss_adjusted': total_dollar_pnl_sub_comms_stop_loss_adjusted,
+                        'ma_dollar_pnl_sub_comms_stop_loss_adjusted': ma_dollar_pnl_sub_comms_stop_loss_adjusted,
+                        'rsi_dollar_pnl_sub_comms_stop_loss_adjusted': rsi_dollar_pnl_sub_comms_stop_loss_adjusted
+                    })
+
+                except Exception as e:
+                    print(f"Error processing {ticker} - {session_name} - {compression_name}: {e}")
+
+    # Convert the list of dictionaries into a DataFrame
+    return pd.DataFrame(pnl_rows)
+
+# Define your periods
+ma_periods = [3, 5, 7, 9]
+ma_combinations = [
+    (f'wma_{wma}', f'sma_{sma}', f'rsi_{wma}')
+    for wma in ma_periods
+    for sma in ma_periods
+    if wma <= sma
+]
+strategy_types = ["trend", "reversion"]
+order_types = ["market", "limit"]
+
+# Generate PnL DataFrame for each full combination
+pnl_dataframes = [
+    generate_pnl_dataframe(
+        compressed_sessions,
+        ticker_to_tick_size,
+        ticker_to_point_value,
+        ma_name1=sig_ma,
+        ma_name2=con_ma,
+        rsi_column=rsi_col,
+        strategy_type=strategy,
+        order_type=order_type
+    )
+    for (sig_ma, con_ma, rsi_col), strategy, order_type in product(ma_combinations, strategy_types, order_types)
+]
+
+# Combine into one big dataframe
+final_pnl_df = pd.concat(pnl_dataframes, ignore_index=True)
+
+def slice_final_pnl_df(df, ticker, compression_factor, ma_period1, ma_period2, rsi_period, strategy_type, order_type):
+    return df[
+        (df['ticker'] == ticker) &
+        (df['compression_factor'] == compression_factor) &
+        (df['ma_period1'] == ma_period1) &
+        (df['ma_period2'] == ma_period2) &
+        (df['rsi_period'] == rsi_period) &
+        (df['strategy_type'] == strategy_type) &
+        (df['order_type'] == order_type)
+    ].reset_index(drop=True)
+
+sliced_df = slice_final_pnl_df(
+    final_pnl_df,
+    ticker='/NQ',
+    compression_factor=3,
+    ma_period1=3,
+    ma_period2=3,
+    rsi_period=3,
+    strategy_type='reversion',
+    order_type='limit'
+)
+display(sliced_df)
+
+def plot_trading_strategies_2(candles, 
+                           ma_name1='wma_5', 
+                           ma_name2='sma_5', 
+                           rsi_column='rsi_5',  
+                           figsize=(40, 20), 
+                           font_size=10, 
+                           ma_markersize=50, 
+                           signal_markersize_y=400, 
+                           signal_markersize_b=250,
+                           strategy_type='trend',
+                           order_type='market'
+                           ):
+    """
+    Plots the minute_candles DataFrame with two selected moving averages and optional RSI.
+    Also plots cumulative profit for MA and RSI strategies on a secondary axis.
+
+    Parameters:
+    - ma_name1 (str): The column name of the first moving average to plot.
+    - ma_name2 (str): The column name of the second moving average to plot.
+    - signal_column (str): The column name of the signal data (default is 'signal').
+    - figsize (tuple): The size of the plot (width, height) in inches (default is (30, 20)).
+    """
+
+    try:
+        # Clean the data to ensure numeric columns are valid
+        columns_to_convert = ['open', 'high', 'low', 'close', 'volume', ma_name1, ma_name2, rsi_column] 
+        candles[columns_to_convert] = candles[columns_to_convert].apply(pd.to_numeric, errors='coerce')
+
+        # Generate dynamic column names for PnL and signals
+        ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+        ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+        rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+        rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+        cum_pnl_ma_col = f'cum_pnl_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+        cum_pnl_rsi_col = f'cum_pnl_{rsi_column}_{strategy_type}_{order_type}'
+        cum_pnl_all_col = f'cum_pnl_all_{ma_name1}_{ma_name2}_{rsi_column}_{strategy_type}_{order_type}'
+        stop_loss_ma = f'stop_loss_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+        stop_loss_rsi = f'stop_loss_{rsi_column}_{strategy_type}_{order_type}'
+
+        # Select the columns to plot
+        plot_data = candles[['datetime', 'open', 'high', 'low', 'close', 'volume', 
+                             ma_name1, ma_name2, rsi_column, 
+                             ma_entry_price, ma_exit_price, rsi_entry_price, rsi_exit_price,
+                             cum_pnl_ma_col, cum_pnl_rsi_col, cum_pnl_all_col,
+                             stop_loss_ma, stop_loss_rsi]].copy() # here
+        plot_data.set_index('datetime', inplace=True)
+
+        # Create the additional plots for the moving averages and RSI, but only if they are warmed up
+        add_plots = []
+
+        # Check if the moving averages have enough valid data to plot
+        if not candles[ma_name1].isnull().all() and not candles[ma_name2].isnull().all():
+            add_plots.append(mpf.make_addplot(plot_data[ma_name1], color='yellow', type='scatter', marker='o', markersize=ma_markersize, label=f'{ma_name1}'))
+            add_plots.append(mpf.make_addplot(plot_data[ma_name1], color='yellow', linestyle='-', width=0.75))
+            add_plots.append(mpf.make_addplot(plot_data[ma_name2], color='purple', type='scatter', marker='o', markersize=ma_markersize, label=f'{ma_name2}'))
+            add_plots.append(mpf.make_addplot(plot_data[ma_name2], color='purple', linestyle='-', width=0.75))
+        else:
+            print("Moving averages have not warmed up yet. Plotting without them.")
+
+        # Check if the RSI has enough valid data to plot
+        if not candles[rsi_column].isnull().all():
+            add_plots.append(mpf.make_addplot(candles[rsi_column], panel=2, color='blue', type='scatter', marker='o', markersize=ma_markersize, label='RSI'))
+            add_plots.append(mpf.make_addplot(candles[rsi_column], panel=2, color='blue', linestyle='-', width=0.75))
+            add_plots.append(mpf.make_addplot(candles['trend_indicator'], panel=2, color='white', type='scatter', marker='o', markersize=ma_markersize, label='RSI'))
+            add_plots.append(mpf.make_addplot(candles['trend_indicator'], panel=2, color='white', linestyle='-', width=0.75))
+            add_plots.append(mpf.make_addplot(candles['hundred_line'], panel=2, color='red', linestyle=':', secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles['fifty_line'], panel=2, color='yellow', linestyle=':', secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles['zero_line'], panel=2, color='green', linestyle=':', secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles['trend_high_threshold'], panel=2, color='white', linestyle=':', secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles['trend_low_threshold'], panel=2, color='white', linestyle=':', secondary_y=False))
+        else:
+            print("RSI has not warmed up yet. Plotting without it.")
+
+        # Add buy, sell, and neutral markers if signal_column exists. Eliminate the if else statement to revert to working order
+        if ma_entry_price in candles.columns and ma_exit_price in candles.columns:
+            add_plots.append(mpf.make_addplot(candles[ma_entry_price], type='scatter', marker='^', markersize=signal_markersize_y, color='yellow', panel=0, secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles[ma_exit_price], type='scatter', marker='o', markersize=signal_markersize_y, color='yellow', panel=0, secondary_y=False))
+        else:
+            print("Buy/Sell markers for MA strat have not warmed up yet. Plotting without them.")
+
+        # Add buy, sell, and neutral markers for RSI strategy
+        if rsi_entry_price in candles.columns and rsi_exit_price in candles.columns:
+            add_plots.append(mpf.make_addplot(candles[rsi_entry_price], type='scatter', marker='^', markersize=signal_markersize_b, color='blue', panel=0, secondary_y=False))
+            add_plots.append(mpf.make_addplot(candles[rsi_exit_price], type='scatter', marker='o', markersize=signal_markersize_b, color='blue', panel=0, secondary_y=False))
+        else:
+            print("Buy/Sell markers for RSI strat have not warmed up yet. Plotting without them.")
+
+        # Add cumulative profit plots on a secondary y-axis with dynamic names
+        add_plots.append(mpf.make_addplot(candles[cum_pnl_ma_col], panel=0, color='yellow', secondary_y=True, label=f'Cumulative PnL (MA: {ma_name1}_{ma_name2})', linestyle='-', width=1.25))
+        add_plots.append(mpf.make_addplot(candles[cum_pnl_rsi_col], panel=0, color='blue', secondary_y=True, label=f'Cumulative PnL (RSI: {rsi_column})', linestyle='-', width=1.25))
+        add_plots.append(mpf.make_addplot(candles[cum_pnl_all_col], panel=0, color='green', secondary_y=True, label=f'Cumulative PnL (Combined)', linestyle='-', width=1.25))
+
+        # Add stop-loss markers (x) for both MA and RSI strategies
+        # if 'stop_loss_ma' in candles.columns:
+        add_plots.append(mpf.make_addplot(candles[stop_loss_ma], type='scatter', marker='x', markersize=100, color='yellow', panel=0, secondary_y=False))
+        # else:
+        #     print("There are no stop loss markers for MA strat")
+        # if 'stop_loss_rsi' in candles.columns:
+        add_plots.append(mpf.make_addplot(candles[stop_loss_rsi], type='scatter', marker='x', markersize=50, color='blue', panel=0, secondary_y=False))
+        # else:
+        #     print("There are no stop loss markers for RSI strat")
+
+        # Add price action envelope as white lines
+        if 'price_action_upper' in candles.columns and 'price_action_lower' in candles.columns:
+            add_plots.append(mpf.make_addplot(candles['price_action_upper'], color='white', linestyle='-', width=0.5, label='Price Action Upper'))
+            add_plots.append(mpf.make_addplot(candles['price_action_lower'], color='white', linestyle='-', width=0.5, label='Price Action Lower'))
+            # add_plots.append(mpf.make_addplot(candles['ma_price_action_upper'], color='white', linestyle='-', width=0.5, label='Price Action Upper'))
+            # add_plots.append(mpf.make_addplot(candles['ma_price_action_lower'], color='white', linestyle='-', width=0.5, label='Price Action Lower'))
+        else:
+            print("Price action envelope not calculating properly")
+
+        # Create a custom style with a black background
+        black_style = mpf.make_mpf_style(
+            base_mpf_style='charles',  # Start with the 'charles' style and modify it
+            facecolor='black',         # Set the background color to black
+            gridcolor='black',          # Set the grid line color
+            edgecolor='purple',          # Set the edge color for candles and boxes
+            figcolor='black',          # Set the figure background color to black
+            rc={'axes.labelcolor': 'yellow', 
+                'xtick.color': 'yellow', 
+                'ytick.color': 'yellow', 
+                'axes.titlecolor': 'yellow',
+                'font.size': font_size, 
+                'axes.labelsize': font_size,
+                'axes.titlesize': font_size,
+                'xtick.labelsize': font_size,
+                'ytick.labelsize': font_size,
+                'legend.fontsize': font_size}  # Set tick and label colors to white
+        )
+
+        # Plot using mplfinance
+        mpf.plot(plot_data, type='candle', style=black_style, 
+                title='',
+                ylabel='Price', 
+                addplot=add_plots, 
+                figsize=figsize,
+                volume=True,
+                panel_ratios=(8, 2),
+                #  panel_ratios=(8, 2, 2),             
+                tight_layout=True)
+    except Exception as e:
+        print(f"Something wrong in the plotting_moving_averages function: {e}")
+
+def visualize_trades_2(candles, ticker_to_tick_size, ticker_to_point_value, ma_name1='wma_5', ma_name2='sma_5',
+                        rsi_column='rsi_5', lower_slice=0, upper_slice=-1, compression_factor=1, session_key="", strategy_type="trend", order_type="market"):
+    """
+    Visualize trades and print summary statistics, including tick size for each ticker.
+
+    Parameters:
+    - candles (dict): Dictionary of DataFrames with candle data for each ticker.
+    - ticker_to_tick_size (dict): Dictionary mapping tickers to their respective tick sizes.
+    - ticker_to_point_value (dict): Dictionary mapping tickers to their respective point values.
+    - ma_name1, ma_name2, rsi_column: Names of MA and RSI columns.
+    - lower_slice, upper_slice: Range of rows to visualize.
+    """
+    # Generate dynamic column names for PnL and trade metrics
+    pnl_ma_col = f'pnl_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    pnl_rsi_col = f'pnl_{rsi_column}_{strategy_type}_{order_type}'
+    cum_pnl_ma_col = f'cum_{pnl_ma_col}'
+    cum_pnl_rsi_col = f'cum_{pnl_rsi_col}'
+    cum_pnl_all_col = f'cum_pnl_all_{ma_name1}_{ma_name2}_{rsi_column}_{strategy_type}_{order_type}'
+    ma_entry_price = f'entry_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    ma_exit_price = f'exit_price_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_entry_price = f'entry_price_{rsi_column}_{strategy_type}_{order_type}'
+    rsi_exit_price = f'exit_price_{rsi_column}_{strategy_type}_{order_type}'
+    ma_commission_col = f'commission_cost_{ma_name1}_{ma_name2}_{strategy_type}_{order_type}'
+    rsi_commission_col = f'commission_cost_{rsi_column}_{strategy_type}_{order_type}'
+
+    # Variable to accumulate total dollar PnL
+    total_dollar_pnl_sum = 0.0
+
+    # Iterate through the candles dictionary
+    for ticker, minute_candles_df in candles.items():
+        # Create a copy of the DataFrame for the specified slice
+        minute_candles_viz_1 = minute_candles_df[lower_slice:upper_slice].copy()
+        tick_size = ticker_to_tick_size.get(ticker, "Unknown")  # Retrieve tick size or default to "Unknown"
+        point_value = ticker_to_point_value.get(ticker, 1)  # Retrieve point value or default to 1
+
+        try:
+            # Plot moving averages
+            plot_trading_strategies_2(
+                minute_candles_viz_1,
+                ma_name1=ma_name1, ma_name2=ma_name2, rsi_column=rsi_column,
+                figsize=(40, 20), font_size=20,
+                ma_markersize=50, signal_markersize_y=450, signal_markersize_b=300, strategy_type=strategy_type, order_type=order_type
+            )
+            
+            # Calculate cumulative PnL and other statistics
+            ma_pnl = round(minute_candles_df[cum_pnl_ma_col].iloc[-1], 3)
+            rsi_pnl = round(minute_candles_df[cum_pnl_rsi_col].iloc[-1], 3)
+            total_pnl = round(minute_candles_df[cum_pnl_all_col].iloc[-1], 3)
+            close_price_diff = round(minute_candles_df["close"].iloc[-1] - minute_candles_df["close"].iloc[0], 3)
+            point_alpha = round(total_pnl - close_price_diff, 3)
+
+            # Retrieve total commission costs
+            ma_commission_total = round(minute_candles_df[ma_commission_col].iloc[-1], 3) if ma_commission_col in minute_candles_df else 0.0
+            rsi_commission_total = round(minute_candles_df[rsi_commission_col].iloc[-1], 3) if rsi_commission_col in minute_candles_df else 0.0
+            total_commission_cost = ma_commission_total + rsi_commission_total
+
+            # Calculate total dollar PnLs
+            ma_dollar_pnl = (ma_pnl * point_value) - ma_commission_total
+            rsi_dollar_pnl = (rsi_pnl * point_value) - rsi_commission_total
+            total_dollar_pnl = (total_pnl * point_value) - total_commission_cost
+            total_dollar_pnl_sum += total_dollar_pnl
+            close_price_dollar_diff = close_price_diff * point_value
+            dollar_alpha = (point_alpha * point_value) - total_commission_cost
+
+            # Count the number of trades for MA and RSI strategies
+            ma_trades = (minute_candles_df[ma_exit_price].notna().sum() + minute_candles_df[ma_entry_price].notna().sum())/2
+            rsi_trades = (minute_candles_df[rsi_exit_price].notna().sum() + minute_candles_df[rsi_entry_price].notna().sum())/2
+            total_trades = ma_trades + rsi_trades
+
+            # Calculate max gain and max loss for MA, RSI, and total strategies
+            ma_max_gain = round(minute_candles_df[cum_pnl_ma_col].max(), 3)
+            ma_max_loss = round(minute_candles_df[cum_pnl_ma_col].min(), 3)
+            rsi_max_gain = round(minute_candles_df[cum_pnl_rsi_col].max(), 3)
+            rsi_max_loss = round(minute_candles_df[cum_pnl_rsi_col].min(), 3)
+            total_max_gain = round(minute_candles_df[cum_pnl_all_col].max(), 3)
+            total_max_loss = round(minute_candles_df[cum_pnl_all_col].min(), 3)
+            ma_max_dollar_gain = (ma_max_gain * point_value) - ma_commission_total
+            ma_max_dollar_loss = (ma_max_loss * point_value) - ma_commission_total
+            rsi_max_dollar_gain = (rsi_max_gain * point_value) - rsi_commission_total
+            rsi_max_dollar_loss = (rsi_max_loss * point_value) - rsi_commission_total
+            total_max_dollar_gain = (total_max_gain * point_value) - total_commission_cost
+            total_max_dollar_loss = (total_max_loss * point_value) - total_commission_cost
+
+            # Print detailed statistics for the ticker
+            print(f"{ticker}: {compression_factor}-Minute Compression Factor, Strategy Type: {strategy_type}, Order Type: {order_type}, Total PnL: {total_pnl:.2f}pt/${total_dollar_pnl:.2f}, {len(minute_candles_df)} rows, "
+                f"Session: {session_key}, {ma_name1}, {ma_name2}, {rsi_column}, "                
+                f"Total trades: {total_trades}, Total Commission Cost: ${total_commission_cost:.2f}, Total Max Gain: {total_max_gain:.2f}pt/${total_max_dollar_gain}, Total Max Loss: {total_max_loss:.2f}pt/${total_max_dollar_loss}, "
+                f"MA PnL: {ma_pnl:.2f}pt/${ma_dollar_pnl:.2f},MA trades: {ma_trades}, MA Commission Cost: ${ma_commission_total:.2f}, MA Max Gain: {ma_max_gain:.2f}pt/${ma_max_dollar_gain}, MA Max Loss: {ma_max_loss:.2f}pt/${ma_max_dollar_loss}, "
+                f"RSI PnL: {rsi_pnl:.2f}pt/${rsi_dollar_pnl:.2f}, RSI trades: {rsi_trades}, RSI Commission Cost: ${rsi_commission_total:.2f}, RSI Max Gain: {rsi_max_gain:.2f}pt/${rsi_max_dollar_gain}, RSI Max Loss: {rsi_max_loss:.2f}pt/${rsi_max_dollar_loss}, "
+                f"Close Price Difference: {close_price_diff:.2f}pt/${close_price_dollar_diff:.2f}, Alpha: {point_alpha:.2f}pt/${dollar_alpha:.2f}, Tick Size: {tick_size}, "                
+            )
+        except Exception as e:
+            # Handle any errors that occur during the plotting
+            print(f"Error in visualize_trades_2 for {ticker}: {e}")
+
+    # Return the total PnL for this ticker so it can be aggregated
+    return total_dollar_pnl_sum
+
+chosen_session_index = 50  # 0 for first session, 1 for second, etc.
+chosen_compression_factor = 3  # Which compression factor to use
+chosen_compression_key = f'{chosen_compression_factor}_minute_compression' # Build the compression string dynamically
+upper_slice = -1  # Slice to the end of the DataFrame
+lower_slice = 0  # Slice from the beginning of the DataFrame
+_wma_rsi = '3'
+_sma = '5'
+wma = f'wma_{_wma_rsi}'
+sma = f'sma_{_sma}'
+rsi = f'rsi_{_wma_rsi}'
+
+# Separate tracking for trend and reversion PnL
+total_pnl_across_tickers_trend = 0.0
+total_pnl_across_tickers_reversion = 0.0
+
+for ticker, sessions in compressed_sessions.items():
+    # Get sorted session keys to create a numerical map
+    session_keys = list(sessions.keys())
+
+    if chosen_session_index >= len(session_keys):
+        print(f"Ticker {ticker} only has {len(session_keys)} sessions. Skipping...")
+        continue
+
+    # Get the actual session key from numerical index
+    chosen_session = session_keys[chosen_session_index]
+
+    # Check if the chosen compression exists within this session
+    if chosen_compression_key not in sessions[chosen_session]:
+        print(f"Ticker {ticker}, session {chosen_session} does not have compression {chosen_compression_key}. Skipping...")
+        continue
+
+    # Grab the DataFrame for the chosen session and compression
+    df = sessions[chosen_session][chosen_compression_key]
+
+    for strategy_type in ["trend", "reversion"]: # Ensure both strategies are visualized sequentially
+        # print(f"\nVisualizing {strategy_type.upper()} strategy for {ticker} - Session: {chosen_session}")
+
+        for order_type in ["market", "limit"]: # Ensure both order types are visualized sequentially
+
+            ticker_pnl = visualize_trades_2(
+                candles={ticker: df},
+                ticker_to_tick_size=ticker_to_tick_size,
+                ticker_to_point_value=ticker_to_point_value,
+                ma_name1=wma,
+                ma_name2=sma,
+                rsi_column=rsi,
+                lower_slice=lower_slice,
+                upper_slice=upper_slice,
+                compression_factor=chosen_compression_factor,
+                session_key=chosen_session, # Pass the session key
+                strategy_type=strategy_type,
+                order_type=order_type
+            )
+
+            # Store PnL separately for each strategy
+            if strategy_type == "trend":
+                total_pnl_across_tickers_trend += ticker_pnl
+            else:
+                total_pnl_across_tickers_reversion += ticker_pnl
+
+    # Print final aggregated PnL for each strategy type
+    print(f"\nTotal Dollar PnL Across All Tickers for Trend Strategy (Session Index {chosen_session_index}): {total_pnl_across_tickers_trend:.2f}")
+    print(f"Total Dollar PnL Across All Tickers for Reversion Strategy (Session Index {chosen_session_index}): {total_pnl_across_tickers_reversion:.2f}")
+
+# Group and aggregate
+grouped = final_pnl_df.groupby([
+    'ticker', 
+    'session', # comment out here to exclude session
+    'compression_factor', 
+    'strategy_type', 
+    'order_type', 
+    'ma_period1', 
+    'ma_period2', 
+    'rsi_period'
+])
+
+# Aggregate total, MA, and RSI PnL (sum and mean)
+agg_df = grouped[['total_dollar_pnl', 'total_dollar_pnl_stop_loss_adjusted', 'total_dollar_pnl_sub_comms_stop_loss_adjusted', 
+                  'ma_dollar_pnl', 'ma_dollar_pnl_stop_loss_adjusted', 'ma_dollar_pnl_sub_comms_stop_loss_adjusted',
+                  'rsi_dollar_pnl', 'rsi_dollar_pnl_stop_loss_adjusted', 'rsi_dollar_pnl_sub_comms_stop_loss_adjusted',
+                  ]].agg(['sum', 'mean']).reset_index()
+
+# 
+
+# Flatten MultiIndex columns
+agg_df.columns = [
+    'ticker', 
+    'session', # comment out here to exclude session
+    'compression_factor', 'strategy_type', 'order_type', 
+    'ma_period1', 'ma_period2', 'rsi_period', 
+    'total_pnl_sum', 'total_pnl_mean', 'total_dollar_pnl_stop_loss_adjusted_sum', 'total_dollar_pnl_stop_loss_adjusted_mean', 'total_dollar_pnl_sub_comms_stop_loss_adjusted_sum', 'total_dollar_pnl_sub_comms_stop_loss_adjusted_mean',
+    'ma_pnl_sum', 'ma_pnl_mean', 'ma_dollar_pnl_stop_loss_adjusted_sum', 'ma_dollar_pnl_stop_loss_adjusted_mean', 'ma_dollar_pnl_sub_comms_stop_loss_adjusted_sum', 'ma_dollar_pnl_sub_comms_stop_loss_adjusted_mean',
+    'rsi_pnl_sum', 'rsi_pnl_mean', 'rsi_dollar_pnl_stop_loss_adjusted_sum', 'rsi_dollar_pnl_stop_loss_adjusted_mean', 'rsi_dollar_pnl_sub_comms_stop_loss_adjusted_sum', 'rsi_dollar_pnl_sub_comms_stop_loss_adjusted_mean'
+]
+
+# Top 10 best-performing parameter combinations
+top_combinations = agg_df.sort_values('total_dollar_pnl_sub_comms_stop_loss_adjusted_sum', ascending=False)
+print("If sums and means are printing the same, you are including session in the groupby. To exclude session, comment out the designated lines in the `grouped` variable and where `agg_df.columns` is created.")
+display(top_combinations[:60])  # Show top 60
+
+def plot_pnl_distributions(
+    final_pnl_df,
+    strategy_type="trend",
+    order_type="market",
+    ma_period1=None,
+    ma_period2=None,
+    rsi_period=None,
+    ma_dollar_pnl = "ma_dollar_pnl",
+    total_dollar_pnl = "total_dollar_pnl",
+    rsi_dollar_pnl = "rsi_dollar_pnl",
+):
+    """
+    Plots the PnL distributions for a single ticker, strategy type, and order type.
+    Assumes the input DataFrame is already filtered to one ticker.
+    """
+
+    # Filter for the selected MA/RSI period combination if provided
+    if ma_period1 is not None and ma_period2 is not None and rsi_period is not None:
+        final_pnl_df = final_pnl_df[
+            (final_pnl_df["ma_period1"] == ma_period1) &
+            (final_pnl_df["ma_period2"] == ma_period2) &
+            (final_pnl_df["rsi_period"] == rsi_period)
+        ]
+
+    if final_pnl_df.empty:
+        print("The DataFrame is empty. No data to visualize.")
+        return
+
+    if "compression_factor" not in final_pnl_df.columns:
+        print("Missing Compression_Factor column.")
+        return
+
+    ticker = final_pnl_df["ticker"].iloc[0]  # For title display
+
+    # Extract unique compression factors
+    compression_factors = sorted(final_pnl_df["compression_factor"].unique())
+
+    # Prepare data for violin plots
+    ma_pnl_data = [final_pnl_df[final_pnl_df["compression_factor"] == cf][ma_dollar_pnl].values for cf in compression_factors]
+    total_pnl_data = [final_pnl_df[final_pnl_df["compression_factor"] == cf][total_dollar_pnl].values for cf in compression_factors]
+    rsi_pnl_data = [final_pnl_df[final_pnl_df["compression_factor"] == cf][rsi_dollar_pnl].values for cf in compression_factors]
+
+    plt.figure(figsize=(20, 12))
+
+    # Position offsets
+    ma_positions = [cf - 0.5 for cf in compression_factors]
+    total_positions = compression_factors
+    rsi_positions = [cf + 0.5 for cf in compression_factors]
+
+    def plot_extra_stats(data, positions, color):
+        for i, pos in enumerate(positions):
+            if len(data[i]) == 0:
+                continue
+            mean_val = np.mean(data[i])
+            q25, q75 = np.percentile(data[i], [25, 75])
+            p5, p95 = np.percentile(data[i], [5, 95])
+            plt.scatter(pos, mean_val, color='black', s=80, zorder=3)
+            plt.plot([pos, pos], [q25, q75], color=color, linewidth=4)
+            plt.plot([pos, pos], [p5, p95], color=color, linewidth=1, linestyle='--')
+
+    # Plot MA
+    violin_ma = plt.violinplot(ma_pnl_data, positions=ma_positions, showmedians=True)
+    for vp in violin_ma['bodies']:
+        vp.set_facecolor('yellow')
+        vp.set_edgecolor('black')
+        vp.set_alpha(0.5)
+    violin_ma['cmedians'].set_color('yellow')
+    for part in ['cmins', 'cmaxes', 'cbars']:
+        violin_ma[part].set_color('yellow')
+    plot_extra_stats(ma_pnl_data, ma_positions, 'yellow')
+
+    # Plot Total
+    violin_total = plt.violinplot(total_pnl_data, positions=total_positions, showmedians=True)
+    for vp in violin_total['bodies']:
+        vp.set_facecolor('green')
+        vp.set_edgecolor('black')
+        vp.set_alpha(0.5)
+    violin_total['cmedians'].set_color('green')
+    for part in ['cmins', 'cmaxes', 'cbars']:
+        violin_total[part].set_color('green')
+    plot_extra_stats(total_pnl_data, total_positions, 'green')
+
+    # Plot RSI
+    violin_rsi = plt.violinplot(rsi_pnl_data, positions=rsi_positions, showmedians=True)
+    for vp in violin_rsi['bodies']:
+        vp.set_facecolor('blue')
+        vp.set_edgecolor('black')
+        vp.set_alpha(0.5)
+    violin_rsi['cmedians'].set_color('blue')
+    for part in ['cmins', 'cmaxes', 'cbars']:
+        violin_rsi[part].set_color('blue')
+    plot_extra_stats(rsi_pnl_data, rsi_positions, 'blue')
+
+    plt.axhline(0, color='yellow', linestyle='--', linewidth=1)
+    plt.xlabel("Compression Factor (Minutes)")
+    plt.ylabel("Dollar PnL")
+    plt.title(f"PnL Distributions vs Compression Factor for {ticker} ({strategy_type}, {order_type})")
+    plt.xticks(compression_factors, labels=[str(cf) for cf in compression_factors])
+    plt.show()
+
+    # Summary Stats
+    print(f"Ticker: {ticker} - Aggregate PnL Metrics by Compression Factor ({strategy_type}, {order_type}):\n")
+    for cf in compression_factors:
+        cf_ma_pnl = final_pnl_df[final_pnl_df["compression_factor"] == cf][ma_dollar_pnl]
+        cf_total_pnl = final_pnl_df[final_pnl_df["compression_factor"] == cf][total_dollar_pnl]
+        cf_rsi_pnl = final_pnl_df[final_pnl_df["compression_factor"] == cf][rsi_dollar_pnl]
+        print(f"  Compression Factor {cf}:")
+        print(f"    MA PnL    -> Sum: {cf_ma_pnl.sum():.2f}, Mean: {cf_ma_pnl.mean():.2f}")
+        print(f"    Total PnL -> Sum: {cf_total_pnl.sum():.2f}, Mean: {cf_total_pnl.mean():.2f}")
+        print(f"    RSI PnL   -> Sum: {cf_rsi_pnl.sum():.2f}, Mean: {cf_rsi_pnl.mean():.2f}")
+        print("-" * 50)
+    print("\n" + "=" * 60 + "\n")
+
+def plot_all_pnl_distributions(final_pnl_df, 
+                               ma_period1=None, 
+                               ma_period2=None, 
+                               rsi_period=None,
+                               ma_dollar_pnl='ma_dollar_pnl',
+                               total_dollar_pnl='total_dollar_pnl',
+                               rsi_dollar_pnl='rsi_dollar_pnl'):
+    """
+    Plots PnL distributions for each ticker, strategy, order type, and selected MA/RSI period combination.
+    """
+    if final_pnl_df.empty:
+        print("The DataFrame is empty. Nothing to plot.")
+        return
+
+    required_columns = {"ticker", "strategy_type", "order_type", "compression_factor"}
+    if not required_columns.issubset(final_pnl_df.columns):
+        print(f"Missing one or more required columns: {required_columns}")
+        return
+
+    unique_tickers = final_pnl_df["ticker"].unique()
+
+    for ticker in unique_tickers:
+        ticker_df = final_pnl_df[final_pnl_df["ticker"] == ticker]
+
+        for strategy_type in ["trend", "reversion"]:
+            for order_type in ["market", "limit"]:
+                subset = ticker_df[
+                    (ticker_df["strategy_type"] == strategy_type) &
+                    (ticker_df["order_type"] == order_type) &
+                    (ticker_df["ma_period1"] == ma_period1) &
+                    (ticker_df["ma_period2"] == ma_period2) &
+                    (ticker_df["rsi_period"] == rsi_period)
+                ]
+                if not subset.empty:
+                    plot_pnl_distributions(
+                        subset,
+                        strategy_type=strategy_type,
+                        order_type=order_type,
+                        ma_period1=ma_period1,
+                        ma_period2=ma_period2,
+                        rsi_period=rsi_period,
+                        ma_dollar_pnl=ma_dollar_pnl,
+                        total_dollar_pnl=total_dollar_pnl,
+                        rsi_dollar_pnl=rsi_dollar_pnl
+                    )
+
+# Trade logic after implementing market vs limit order iteration and before iterating through directional bias
+###############################################################################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
