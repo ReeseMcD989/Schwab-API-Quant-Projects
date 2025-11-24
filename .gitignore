@@ -4,3 +4,4 @@ __pycache__/
 *.json
 *.txt
 compressed_sessions_flat.csv
+examples/swing_trade_charts/
