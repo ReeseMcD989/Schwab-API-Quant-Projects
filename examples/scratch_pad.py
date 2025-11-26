@@ -3,18 +3,21 @@
 # Make daily or 30 min optional in fetch_incubation_data_by_category and get_schwab_data
 
 # Find out where 30 min incubation data is being transformed to daily data
-# What are the pearson and spearman correlation methods?
 # Go through whole notebook and make sure all cells have a summary markdown
 # Ensure all functions have docstrings
 # Continue comprehensive code review and cleanup redundant or unnecessary code
+# Figure out how to code TrendHeat in Tradovate
 
 # Modify slice_last_year_from functions to be able to take more than one year
 # Implement parallel processing in the fetch_incubation_data_by_category function if possible
-# Reverse the ranking process so that we sort by best performers first and fit the ranking metrics to that
-
+# Reverse the ranking process so that we sort by best performers first and fit the ranking metrics to that-
+    # Keep experimenting with different models and features to improve the ranking accuracy
+# Split data into analysis, walk-forward, and "incubation" periods
+    # This will involve removing evaluation related code from the notebook entirely and building in new code
 
 
 # pandas, NumPy, scikit-learn, matplotlib
+# Use the repl
 
 
 
