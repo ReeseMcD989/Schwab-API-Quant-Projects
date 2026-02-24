@@ -3,6 +3,7 @@ __pycache__/
 *.env
 *.json
 *.txt
+*.csv
 compressed_sessions_flat.csv
 swing_trade_charts/
 strategies/
